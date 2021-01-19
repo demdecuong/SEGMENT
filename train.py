@@ -206,12 +206,16 @@ if __name__ == "__main__":
 
                 if config.n_mixture == 1:
                     B, L = source_WORD_encoding.size()
-                    # mixture_id = torch.zeros(B,
-                    #                          dtype=torch.long, device=device)
-                    mixture_id = torch.arange(L,dtype=torch.long,
+                    mixture_id = torch.zeros(B,
+                                             dtype=torch.long, device=device)
+                    position_id = torch.arange(L,dtype=torch.long,
                                       device=device).unsqueeze(0).repeat(B, 1)
                 else:
                     # 1) Select a minimum-loss SELECTOR expert (E-Step)
+                    B, L = source_WORD_encoding.size()
+
+                    position_id = torch.arange(L,dtype=torch.long,
+                                      device=device).unsqueeze(0).repeat(B, 1)
                     model.selector.eval()
                     with torch.no_grad():
 
@@ -223,6 +227,7 @@ if __name__ == "__main__":
                             pos_encoding=pos_encoding,
                             case_encoding=case_encoding,
                             mixture_id=None,
+                            position_id=position_id,
                             focus_input=focus_input,
                             train=True)
 
@@ -252,7 +257,7 @@ if __name__ == "__main__":
 
                 # 2) Train with the selected SELECTOR expert (M-Step)
                 model.selector.train()
-
+    
                 # [B, L]
                 focus_logit, focus_segment_logit  = model.selector(
                     source_WORD_encoding,
@@ -261,6 +266,7 @@ if __name__ == "__main__":
                     pos_encoding=pos_encoding,
                     case_encoding=case_encoding,
                     mixture_id=mixture_id,
+                    position_id=position_id,
                     focus_input=focus_input,
                     train=True)
 

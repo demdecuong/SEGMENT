@@ -8,7 +8,7 @@ import torch.nn as nn
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 from layers.transformer import EncoderWrapper
-from layers.copy_attention import BahdanauAttention
+from layers.copy_attention import BahdanauAttention2
 
 
 class GRUEncoder(nn.Module):
@@ -51,7 +51,7 @@ class GRUEncoder(nn.Module):
             source_len, dim=0, descending=True)
         _, idx_unsort = torch.sort(idx_sorted, dim=0)
 
-        if self.task == 'QG':
+        if self.task == 'QG':       
             source_WORD_encoding = source_WORD_encoding[idx_sorted]
             answer_position_BIO_encoding = answer_position_BIO_encoding[idx_sorted]
             ner_encoding = ner_encoding[idx_sorted]
@@ -99,27 +99,28 @@ class ParallelDecoder(nn.Module):
         """Parallel Decoder for Focus Selector"""
         super().__init__()
         # 400 is max source len
-        self.mixture_embedding = nn.Embedding(400, enc_hidden_size)
+        self.mixture_embedding = nn.Embedding(n_mixture, enc_hidden_size)
+        self.positional_embedding = nn.Embedding(400, enc_hidden_size)
 
         # input_size = embed_size
         self.enc_hidden_size = enc_hidden_size
         self.dec_hidden_size = dec_hidden_size
 
         self.out_mlp1 = nn.Sequential(
-            nn.Linear(enc_hidden_size + dec_hidden_size  +
+            nn.Linear(enc_hidden_size + dec_hidden_size  + enc_hidden_size + enc_hidden_size +
                       enc_hidden_size, dec_hidden_size),
             nn.Tanh(),
             nn.Linear(dec_hidden_size, 1),
         )
 
         self.out_mlp2 = nn.Sequential(
-            nn.Linear(enc_hidden_size + dec_hidden_size  +
+            nn.Linear(enc_hidden_size + dec_hidden_size  + enc_hidden_size + enc_hidden_size + 
                       enc_hidden_size, dec_hidden_size),
             nn.Tanh(),
             nn.Linear(dec_hidden_size, 1),
         )
 
-        self.attention = BahdanauAttention(enc_hidden_size, dec_hidden_size)
+        self.attention = BahdanauAttention2(enc_hidden_size, dec_hidden_size)
 
         self.threshold = threshold
 
@@ -128,6 +129,7 @@ class ParallelDecoder(nn.Module):
                 s,
                 source_WORD_encoding,
                 mixture_id,
+                position_id,
                 focus_input=None,
                 train=True,
                 max_decoding_len=None):
@@ -136,19 +138,21 @@ class ParallelDecoder(nn.Module):
 
         # [B, max_source_len , embed_size]
         mixture_embedding = self.mixture_embedding(mixture_id)
+        positional_embedding = self.positional_embedding(position_id)
         pad_mask = (source_WORD_encoding == 0)
-        # # B x max_src_len 
-        # attention = self.attention(enc_outputs, mixture_embedding, pad_mask)
-        # # B x 1 x enc_hidden_size
-        # context = torch.bmm(attention.unsqueeze(1), enc_outputs)
-        # # B x max_source_len x enc_hidden_size
-        # context = repeat(context, max_source_len).view(B,max_source_len,-1)
+        # B x max_src_len
 
-        # [B, max_source_len, enc_hidden_size + dec_hidden_size + enc_hidden_size + embed_size]
+        attention = self.attention(enc_outputs, positional_embedding, pad_mask)
+        # B x 1 x enc_hidden_size
+        context = torch.bmm(attention.unsqueeze(1), enc_outputs)
+        # B x max_source_len x enc_hidden_size
+        context = repeat(context, max_source_len).view(B,max_source_len,-1)
 
         concat_h = torch.cat([enc_outputs,
                               s.unsqueeze(1).expand(-1, max_source_len, -1),
-                              mixture_embedding], dim=2)
+                              context,
+                              positional_embedding,
+                              mixture_embedding.unsqueeze(1).expand(-1, max_source_len, -1)], dim=2)
 
         # [B, max_source_len]
         focus_logit = self.out_mlp1(concat_h).squeeze(2)
@@ -207,6 +211,7 @@ class ParallelSelector(nn.Module):
                 pos_encoding=None,
                 case_encoding=None,
                 mixture_id=None,
+                position_id=None,
                 focus_input=None,
                 train=True,
                 max_decoding_len=None):
@@ -231,8 +236,12 @@ class ParallelSelector(nn.Module):
             s = repeat(s, self.n_mixture)
             source_WORD_encoding = repeat(source_WORD_encoding, self.n_mixture)
             focus_input = repeat(focus_input, self.n_mixture)
-            mixture_id = torch.arange(L, dtype=torch.long,
+            position_id = torch.arange(L, dtype=torch.long,
                                       device=s.device).unsqueeze(0).repeat(B, 1)
+            position_id = repeat(position_id, self.n_mixture)
+
+            mixture_id = torch.arange(self.n_mixture, dtype=torch.long,
+                                      device=s.device).unsqueeze(0).repeat(B, 1).flatten()
         else:
             assert mixture_id.size(0) == B
 
@@ -241,6 +250,7 @@ class ParallelSelector(nn.Module):
             s,
             source_WORD_encoding,
             mixture_id,
+            position_id,
             focus_input,
             train,
             max_decoding_len=None)

@@ -71,6 +71,7 @@ class FocusSelector(nn.Module):
                 case_encoding=None,
                 focus_POS_prob=None,
                 mixture_id=None,
+                position_id=None,
                 focus_input=None,
                 train=True,
                 max_decoding_len=30):
@@ -82,6 +83,7 @@ class FocusSelector(nn.Module):
             pos_encoding,
             case_encoding,
             mixture_id,
+            position_id,
             focus_input,
             train,
             max_decoding_len)
