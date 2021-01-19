@@ -8,7 +8,7 @@ import torch.nn as nn
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 from layers.transformer import EncoderWrapper
-from layers.copy_attention import BahdanauAttention
+from layers.copy_attention import BahdanauAttention2
 
 
 class GRUEncoder(nn.Module):
@@ -106,20 +106,20 @@ class ParallelDecoder(nn.Module):
         self.dec_hidden_size = dec_hidden_size
 
         self.out_mlp1 = nn.Sequential(
-            nn.Linear(enc_hidden_size + dec_hidden_size  +
+            nn.Linear(enc_hidden_size + dec_hidden_size  + enc_hidden_size +
                       enc_hidden_size, dec_hidden_size),
             nn.Tanh(),
             nn.Linear(dec_hidden_size, 1),
         )
 
         self.out_mlp2 = nn.Sequential(
-            nn.Linear(enc_hidden_size + dec_hidden_size  +
+            nn.Linear(enc_hidden_size + dec_hidden_size  + enc_hidden_size +
                       enc_hidden_size, dec_hidden_size),
             nn.Tanh(),
             nn.Linear(dec_hidden_size, 1),
         )
 
-        self.attention = BahdanauAttention(enc_hidden_size, dec_hidden_size)
+        self.attention = BahdanauAttention2(enc_hidden_size, dec_hidden_size)
 
         self.threshold = threshold
 
@@ -137,17 +137,18 @@ class ParallelDecoder(nn.Module):
         # [B, max_source_len , embed_size]
         mixture_embedding = self.mixture_embedding(mixture_id)
         pad_mask = (source_WORD_encoding == 0)
-        # # B x max_src_len 
-        # attention = self.attention(enc_outputs, mixture_embedding, pad_mask)
-        # # B x 1 x enc_hidden_size
-        # context = torch.bmm(attention.unsqueeze(1), enc_outputs)
-        # # B x max_source_len x enc_hidden_size
-        # context = repeat(context, max_source_len).view(B,max_source_len,-1)
+        # B x max_src_len 
+        attention = self.attention(enc_outputs, mixture_embedding, pad_mask)
+        # B x 1 x enc_hidden_size
+        context = torch.bmm(attention.unsqueeze(1), enc_outputs)
+        # B x max_source_len x enc_hidden_size
+        context = repeat(context, max_source_len).view(B,max_source_len,-1)
 
         # [B, max_source_len, enc_hidden_size + dec_hidden_size + enc_hidden_size + embed_size]
 
         concat_h = torch.cat([enc_outputs,
                               s.unsqueeze(1).expand(-1, max_source_len, -1),
+                              context,
                               mixture_embedding], dim=2)
 
         # [B, max_source_len]
