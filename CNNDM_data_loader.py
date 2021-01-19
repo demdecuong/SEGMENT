@@ -17,11 +17,11 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Dataset, DataLoader
 
 import re
+from rake_nltk import Rake
 
 
 def split_tagged_sentences(article, sentence_start_tag='<t>', sentence_end_tag='</t>'):
-    bare_sents = re.findall(r'%s (.+?) %s' %
-                            (sentence_start_tag, sentence_end_tag), article)
+    bare_sents = re.findall(r'%s (.+?) %s' % (sentence_start_tag, sentence_end_tag), article)
     return bare_sents
 
 
@@ -77,6 +77,9 @@ def make_focus_target(src_split, tgt):
     endix = 0
     matches = []
     matchstrings = Counter()
+    print(src_split)
+    print(tgt)
+    exit()
     while endix < len(src_split):
         # last check is to make sure that phrases at end can be copied
         searchstring = compile_substring(startix, endix, src_split)
@@ -99,6 +102,27 @@ def make_focus_target(src_split, tgt):
             startix = endix
     return matches
 
+def make_focus_segment(matches):
+    # matches = [False, False, False, False, .... ]
+    for i in range(len(matches)):
+        if i == 0:
+            matches[i] = matches[i] and matches[i+1]
+        elif i == len(matches) - 1:
+            matches[i] = matches[i-1] and matches[i]
+        else:
+            matches[i] = (matches[i-1] or matches[i+1]) and matches[i]
+    return matches
+
+def make_focus_cont_segment(matches):
+    # matches = [False, False, False, False, .... ]
+    for i in range(len(matches)):
+        if i == 0:
+            matches[i] = matches[i] and matches[i+1]
+        elif i == len(matches) - 1:
+            matches[i] = matches[i-1] and matches[i]
+        else:
+            matches[i] = (matches[i-1] or matches[i+1]) and matches[i]
+    return matches
 
 def preprocess_data(data_dir, split='train', n_process=4, max_len=None):
     print(f'Preprocessing {split} dataset...')
@@ -149,12 +173,14 @@ def preprocess_single_example(src_tgt, split='train'):
     source_WORD_encoding = []
     source_WORD_encoding_extended = []
     focus_mask = []
+    focus_segment_mask = []
     focus_WORD = []
     focus_input = []
     oovs = []
 
     # target = tgt = split_tagged_sentences(tgt)[0]
     src_focus_annotated = make_focus_target(src_split, tgt)
+    src_segment_focus_annotated = make_focus_segment(src_focus_annotated)
 
     assert len(src_split) == len(src_focus_annotated)
 
@@ -172,10 +198,11 @@ def preprocess_single_example(src_tgt, split='train'):
             source_WORD_encoding_extended.append(len(word2id) + oov_num)
 
         focus_mask.append(int(is_copied))
+        focus_segment_mask.append(int(src_segment_focus_annotated[i]))
+
         if is_copied:
             focus_WORD.append(word)
-            focus_input.append(
-                word2id[word] if word in word2id else word2id['<unk>'])
+            focus_input.append(word2id[word] if word in word2id else word2id['<unk>'])
 
         # if split in ['train', 'val'] and (i + 1) == 400:
         if (i + 1) == 400:
@@ -215,6 +242,7 @@ def preprocess_single_example(src_tgt, split='train'):
         'oovs': oovs,
         'focus_WORD': focus_WORD,
         'focus_mask': focus_mask,
+        'focus_segment_mask': focus_segment_mask,
         'focus_input': focus_input
     }
     return example
@@ -363,6 +391,7 @@ def get_SM_loader(df, n_data_epoch=None, **kwargs):
         else:
             return DataLoader(dataset, collate_fn=sm_collate_fn_val, **kwargs)
 
+
 def load_word_vector(vector_path, word2id, dim=300):
     """
     Read pretrained vectors
@@ -399,8 +428,8 @@ if __name__ == '__main__':
     current_dir = Path(__file__).resolve().parent
 
     data_dir = current_dir.parent.joinpath('cnndm/')
-    out_dir = current_dir.parent.joinpath('cnndm_out/')
-    out_dir.mkdir()
+    out_dir = current_dir.parent.joinpath('cnndm_segment_pos/')
+    # out_dir.mkdir()
 
     word2id, id2word = vocab_read(data_dir.joinpath('vocab'))
     with open(out_dir.joinpath('vocab.pkl'), 'wb') as f:
