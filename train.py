@@ -549,7 +549,6 @@ if __name__ == "__main__":
     model.load_state_dict(checkpoint['model'])
     print('Loaded checkpoint from best epoch:', best_epoch)
 
-    metric_result, hypotheses, best_hypothesis, hyp_focus, hyp_attention = evaluate(
-        test_loader, model, best_epoch, config, test=True)
+    metric_result, hypotheses, best_hypothesis, hyp_focus, hyp_attention = evaluate(test_loader, model, best_epoch, config, test=True)
     print('Best validation epoch:', best_epoch)
     print(f'Best validation {metric_name}: {best_eval_metric:.3f}')
