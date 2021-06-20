@@ -26,6 +26,8 @@ class BahdanauAttention(nn.Module):
         self.weight_norm = weight_norm
         self.end_bias = pointer_end_bias
 
+        # positional context
+        self.Wp = nn.Linear(enc_hidden_size, attention_size, bias=False)
         # encoder state
         self.Wh = nn.Linear(enc_hidden_size, attention_size, bias=False)
         # decoder state
@@ -50,9 +52,12 @@ class BahdanauAttention(nn.Module):
         if self.end_bias:
             self.end_energy = nn.Parameter(torch.randn(1, 1))
 
+        # self.gated_mask = GatedMask(enc_hidden_size)
+
     def forward(self, encoder_outputs, decoder_state, mask, coverage=None):
         """
         Args:
+            spotlight_embed [B, source_len, focus_embed]
             encoder_outputs [B, source_len, hidden_size]
             decoder_state [B, hidden_size]
             mask [B, source_len]
@@ -74,6 +79,7 @@ class BahdanauAttention(nn.Module):
         # [B, 1, hidden_size]
         dec_state_energy = self.Ws(decoder_state).unsqueeze(1)
         # [B, source_len, hidden_size]
+
         energy = enc_out_energy + dec_state_energy
 
         if self.coverage:
@@ -90,6 +96,11 @@ class BahdanauAttention(nn.Module):
 
         energy = self.tanh(energy)  # [B, source_len, hidden_size]
         energy = self.v(energy).squeeze(2)  # [B, source_len]
+
+        # gated_mask = self.gated_mask(spotlight_embed, encoder_outputs, decoder_state)
+        # gated_mask = gated_mask.squeeze(2)
+
+        # energy = energy * gated_mask
 
         # mask out attention outside of answer sentence
         energy.masked_fill_(mask, -math.inf)
@@ -227,6 +238,44 @@ class CopySwitch(nn.Module):
         p = self.sigmoid(p)
 
         return p
+
+class GatedMask(nn.Module):
+    def __init__(self, enc_hidden_size=512):
+        """Pointing the Unknown Words (ACL 2016)"""
+        super().__init__()
+        self.enc_hidden_size = enc_hidden_size
+
+        # self.W = nn.Linear(hidden_size,  1)
+        # self.U = nn.Linear(hidden_size,  1, bias=False)
+        # focus_embed_size = 32
+        self.W = nn.Linear(32*2 + enc_hidden_size + enc_hidden_size, 1)
+        self.ins_norm = nn.InstanceNorm1d(400, affine=True)
+        # self.norm = nn.LayerNorm([400,1])
+
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, spotlight_embed, encoder_outputs, decoder_state):
+        """
+        Args:
+            spotlight_embed [B, source_len, focus_embed_size*2]
+            encoder_outputs [B, source_len, hidden_size]
+            decoder_state [B, hidden_size]
+        Return:
+            p [B, source_len]
+
+        p = sigmoid(W @ s + U @ c + b)
+        """
+        # [B, 1]
+        # p = self.W(decoder_state) + self.U(context)
+        B, max_source_len, hidden_size = spotlight_embed.size()
+        decoder_state = decoder_state.unsqueeze(1).expand(-1, max_source_len, -1)
+
+        p = self.W(torch.cat([spotlight_embed, encoder_outputs,decoder_state], dim=-1))
+        p = self.ins_norm(p)
+        # p = self.norm(p)
+        p = self.sigmoid(p)
+        return p
+
 
 
 class PointerGenerator(nn.Module):

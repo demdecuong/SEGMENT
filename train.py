@@ -216,7 +216,7 @@ if __name__ == "__main__":
                     with torch.no_grad():
 
                         # [B * n_mixture, L]
-                        focus_logit , focus_segment_logit = model.selector(
+                        pos_context, focus_logit , focus_segment_logit = model.selector(
                             source_WORD_encoding,
                             answer_position_BIO_encoding=answer_position_BIO_encoding,
                             ner_encoding=ner_encoding,
@@ -254,7 +254,7 @@ if __name__ == "__main__":
                 model.selector.train()
 
                 # [B, L]
-                focus_logit, focus_segment_logit  = model.selector(
+                pos_context, focus_logit, focus_segment_logit  = model.selector(
                     source_WORD_encoding,
                     answer_position_BIO_encoding=answer_position_BIO_encoding,
                     ner_encoding=ner_encoding,
@@ -371,6 +371,7 @@ if __name__ == "__main__":
                     focus_mask=focus_mask,
                     focus_segment_mask=focus_segment_mask,
                     mixture_id=mixture_id,
+                    pos_context=pos_context,
                     target_WORD_encoding=target_WORD_encoding,
                     source_WORD_encoding_extended=source_WORD_encoding_extended,
                     train=True)
@@ -384,6 +385,7 @@ if __name__ == "__main__":
                     pos_encoding=pos_encoding,
                     case_encoding=case_encoding,
                     focus_mask=focus_mask,
+                    pos_context=pos_context,
                     focus_segment_mask=focus_segment_mask,
                     target_WORD_encoding=target_WORD_encoding,
                     source_WORD_encoding_extended=source_WORD_encoding_extended,

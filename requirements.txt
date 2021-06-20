@@ -1,7 +1,6 @@
-torch==1.6.0+cu101 -f https://download.pytorch.org/whl/torch_stable.html
+torch==1.1
 nltk
 pandas
 tqdm
 pyyaml
-rouge-score
 git+git://github.com/bheinzerling/pyrouge

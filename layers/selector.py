@@ -9,7 +9,7 @@ from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 from layers.transformer import EncoderWrapper
 from layers.copy_attention import BahdanauAttention2
-
+from layers.tcn import TemporalConvNet
 
 class GRUEncoder(nn.Module):
     def __init__(self,
@@ -34,6 +34,9 @@ class GRUEncoder(nn.Module):
         self.hidden_size = hidden_size
 
         self.dropout = nn.Dropout(dropout_p)
+
+        self.tcn = TemporalConvNet(hidden_size,[hidden_size,hidden_size * 2], 3 , dropout_p)
+        self.max_pool1d = nn.MaxPool1d(2)
 
     def forward(self,
                 source_WORD_encoding,
@@ -90,12 +93,15 @@ class GRUEncoder(nn.Module):
         enc_outputs = enc_outputs[idx_unsort]
         h = h.index_select(1, idx_unsort)
 
+        enc_outputs = self.tcn(enc_outputs.transpose(1,2)).transpose(1,2)
+        enc_outputs = self.max_pool1d(enc_outputs)
+
         return enc_outputs, h
 
 
 class ParallelDecoder(nn.Module):
     def __init__(self, embed_size=300, enc_hidden_size=512, dec_hidden_size=512,
-                 n_mixture=5, threshold=0.15, task='QG'):
+                 n_mixture=5, threshold=0.15,dropout_p=0.02, task='QG'):
         """Parallel Decoder for Focus Selector"""
         super().__init__()
         # 400 is max source len
@@ -106,14 +112,14 @@ class ParallelDecoder(nn.Module):
         self.dec_hidden_size = dec_hidden_size
 
         self.out_mlp1 = nn.Sequential(
-            nn.Linear(enc_hidden_size + dec_hidden_size  + enc_hidden_size +
+            nn.Linear(enc_hidden_size + dec_hidden_size + enc_hidden_size +
                       enc_hidden_size, dec_hidden_size),
             nn.Tanh(),
             nn.Linear(dec_hidden_size, 1),
         )
 
         self.out_mlp2 = nn.Sequential(
-            nn.Linear(enc_hidden_size + dec_hidden_size  + enc_hidden_size +
+            nn.Linear(enc_hidden_size + dec_hidden_size + enc_hidden_size +
                       enc_hidden_size, dec_hidden_size),
             nn.Tanh(),
             nn.Linear(dec_hidden_size, 1),
@@ -134,13 +140,15 @@ class ParallelDecoder(nn.Module):
 
         B, max_source_len = source_WORD_encoding.size()
 
-        # [B, max_source_len , embed_size]
+        # [B, embed_size]
         mixture_embedding = self.mixture_embedding(mixture_id)
         pad_mask = (source_WORD_encoding == 0)
-        # B x max_src_len 
+        # B x max_src_len   
         attention = self.attention(enc_outputs, mixture_embedding, pad_mask)
         # B x 1 x enc_hidden_size
         context = torch.bmm(attention.unsqueeze(1), enc_outputs)
+        pos_context = context.squeeze(1)
+
         # B x max_source_len x enc_hidden_size
         context = repeat(context, max_source_len).view(B,max_source_len,-1)
 
@@ -157,14 +165,14 @@ class ParallelDecoder(nn.Module):
 
         if train:
             # [B, max_source_len]
-            return focus_logit, focus_segment_logit
+            return pos_context, focus_logit, focus_segment_logit
 
         else:
             focus_p = torch.sigmoid(focus_logit)
             focus_segment_p = torch.sigmoid(focus_segment_logit)
 
             # [B, max_source_len]
-            return focus_p, focus_segment_p
+            return pos_context, focus_p, focus_segment_p
 
 
 class ParallelSelector(nn.Module):
@@ -199,7 +207,7 @@ class ParallelSelector(nn.Module):
 
         self.decoder = ParallelDecoder(
             word_embed_size, enc_hidden_size, dec_hidden_size,
-            n_mixture=n_mixture, task=task, threshold=threshold)
+            n_mixture=n_mixture, task=task, threshold=threshold,dropout_p = dropout_p)
 
     def forward(self,
                 source_WORD_encoding,

@@ -75,7 +75,7 @@ class FocusSelector(nn.Module):
                 train=True,
                 max_decoding_len=30):
 
-        out , segment_out = self.selector(
+        pos_context, out , segment_out = self.selector(
             source_WORD_encoding,
             answer_position_BIO_encoding,
             ner_encoding,
@@ -89,12 +89,12 @@ class FocusSelector(nn.Module):
         if train:
             focus_logit = out
             focus_segment_logit = segment_out
-            return focus_logit, segment_out
+            return pos_context, focus_logit, segment_out
 
         else:
             generated_focus_mask = out
             generated_focus_segment_mask = segment_out
-            return generated_focus_mask , generated_focus_segment_mask
+            return pos_context, generated_focus_mask , generated_focus_segment_mask
 
 
 class Seq2Seq(nn.Module):
@@ -167,15 +167,6 @@ class Seq2Seq(nn.Module):
             self.pos_embed = None
             self.case_embed = None
 
-        if use_focus:
-            self.focus_embed = nn.Embedding(
-                3, focus_embed_size, padding_idx=-1)  # Binary
-            self.encoder.focus_embed = self.focus_embed
-            
-            self.focus_segment_embed = nn.Embedding(
-                3, focus_embed_size, padding_idx=-1)  # Binary
-            self.encoder.focus_segment_embed = self.focus_segment_embed
-
         # for using encoder's hidden state as decoder input
         if model == 'NQG':
             self.bridge = LinearBridge(
@@ -206,6 +197,17 @@ class Seq2Seq(nn.Module):
         if tie:
             self.decoder.readout.Wo.weight = self.word_embed.weight
 
+        if use_focus:
+            self.focus_embed = nn.Embedding(
+                3, focus_embed_size, padding_idx=-1)  # Binary
+            self.encoder.focus_embed = self.focus_embed
+            self.decoder.focus_embed = self.encoder.focus_embed
+            
+            self.focus_segment_embed = nn.Embedding(
+                3, focus_embed_size, padding_idx=-1)  # Binary
+            self.encoder.focus_segment_embed = self.focus_segment_embed
+            self.decoder.focus_segment_embed = self.encoder.focus_segment_embed
+            
     def forward(self,
                 source_WORD_encoding,
                 answer_WORD_encoding=None,
@@ -216,6 +218,7 @@ class Seq2Seq(nn.Module):
                 focus_mask=None,
                 focus_segment_mask=None,
                 mixture_id=None,
+                pos_context=None,
                 target_WORD_encoding=None,
                 source_WORD_encoding_extended=None,
                 train=True,
@@ -274,7 +277,10 @@ class Seq2Seq(nn.Module):
             source_WORD_encoding_extended=source_WORD_encoding_extended,
             train=train,
             decoding_type=decoding_type,
+            pos_context=pos_context,
             K=beam_k,
+            focus_mask=focus_mask,
+            focus_segment_mask=focus_segment_mask,
             max_dec_len=max_dec_len,
             temperature=temperature,
             diversity_lambda=diversity_lambda)

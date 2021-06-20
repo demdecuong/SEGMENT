@@ -481,7 +481,7 @@ class PGDecoder(nn.Module):
         super().__init__()
 
         input_size = embed_size
-        self.input_linear = nn.Linear(embed_size + enc_hidden_size, input_size)
+        self.input_linear = nn.Linear(embed_size + enc_hidden_size + 32, input_size)
 
         self.hidden_size = dec_hidden_size
         self.vocab_size = vocab_size
@@ -528,6 +528,9 @@ class PGDecoder(nn.Module):
                 train=True,
                 decoding_type='beam',
                 K=10,
+                focus_mask=None,
+                focus_segment_mask=None,
+                pos_context=None,
                 max_dec_len=100,
                 temperature=1.0,
                 diversity_lambda=0.5):
@@ -571,10 +574,14 @@ class PGDecoder(nn.Module):
                     s = (repeat(s[0], K), repeat(s[1], K))
                 # [B*K, max_source_len, hidden*2]
                 enc_outputs = repeat(enc_outputs, K)
+                # pos_context = repeat(pos_context, K)
+                # focus_mask = repeat(focus_mask,K)
+                # focus_segment_mask = repeat(focus_segment_mask,K)
                 # [B*K, max_source_len]
                 pad_mask = repeat(pad_mask, K)
                 # [B*K, max_source_len]
                 source_WORD_encoding_extended = repeat(source_WORD_encoding_extended, K)
+                source_WORD_encoding = repeat(source_WORD_encoding,K)
                 # [B*K, max_source_len]
                 coverage = repeat(coverage, K)
 
@@ -601,6 +608,10 @@ class PGDecoder(nn.Module):
         output_sentence = []
         coverage_loss_list = []
 
+        # focus_embed = self.focus_embed(focus_mask)
+        # focus_segment_embed = self.focus_segment_embed(focus_segment_mask)  
+        # spotlight_embed = torch.cat([focus_embed,focus_segment_embed],dim = -1)
+        
         # for attention visualization
         self.attention_list = []
 
@@ -611,17 +622,24 @@ class PGDecoder(nn.Module):
             else:
                 dec_input_word_embed = self.word_embed(dec_input_word)
 
+            dec_focus_mask = get_dec_focus_mask(source_WORD_encoding,dec_input_word)
+            dec_focus_embed = self.focus_embed(dec_focus_mask)
+
             # Feed context vector to decoder rnn
             if i == 0:
                 # [B, hidden_size]
                 context = torch.zeros_like(enc_outputs[:, 0])
-            dec_input = self.input_linear(torch.cat([dec_input_word_embed, context], dim=1))
+            dec_input = self.input_linear(torch.cat([dec_input_word_embed,dec_focus_embed, context], dim=1))
 
             s = self.rnncell(dec_input, s)
 
             if self.rnn_type == 'LSTM':
                 s_cat = torch.cat([s[0], s[1]], dim=1)
 
+
+            # spotlight_mask = get_spotlight_mask(i,source_WORD_encoding,dec_input_word,focus_mask,K,train)
+            # spotlight_embed = self.focus_segment_embed(focus_segment_mask) + self.focus_embed(focus_mask)
+            
             # ------ Attention ------#
             # Bahdanau Attention (Softmaxed)
             # [B, max_source_len]
@@ -696,6 +714,10 @@ class PGDecoder(nn.Module):
 
             # p_out = torch.cat(
             #     [p_gen * p_vocab, torch.zeros(p_vocab.size(0), max_n_oov, device=device)], dim=1)
+            
+            # attention [B, source_len]
+            # copy_attention = get_copy_attention(attention,focus_mask)
+
             p_out.scatter_add_(1, source_WORD_encoding_extended, (1 - p_gen) * attention)
             if not train:
                 p_out[:, UNK_ID] = 0
@@ -718,7 +740,6 @@ class PGDecoder(nn.Module):
                 unk = torch.full_like(dec_input_word, UNK_ID)
                 dec_input_word = torch.where(
                     dec_input_word >= self.vocab_size, unk, dec_input_word)
-
             # ------ Decoding ------#
             else:
                 if decoding_type in ['beam', 'diverse_beam']:
@@ -878,3 +899,67 @@ class PGDecoder(nn.Module):
                 output_sentence = torch.stack(output_sentence, dim=-1).view(B, 1, -1)
                 # [B, 1, max_dec_len], [B, 1]
                 return output_sentence, score
+
+
+def get_spotlight_mask(i,source_WORD_encoding,dec_input_word,focus_mask,K,train = True):
+    '''
+    Return a mask that predicted output is in focus_mask
+    i : int  
+        index of current predicted word
+    source_WORD_encoding : [B,L]
+    dec_input_word: [B*K]
+        previous predicted words 
+    focus_mask: [B,L]
+    K : int
+        beam size
+    '''
+    if train != True:
+        source_WORD_encoding = repeat(source_WORD_encoding,K)
+        focus_mask = repeat(focus_mask,K)
+    BK , L = source_WORD_encoding.size()
+    # if predicted words in source
+    idx_mask = source_WORD_encoding==dec_input_word.unsqueeze(1).repeat(1,L)
+    # [B*K , L] prev_index is in src = 1
+    idx_mask = (idx_mask == True).long() # [0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  ..., 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    
+    # joint focus mask and idx_mask
+    spotlight_mask = ((idx_mask + focus_mask)==2).long()
+
+    
+    # # next token mask
+    # tmp = torch.zeros(BK,1 , device=focus_mask.device)
+    # # concat a zeros token
+    # spotlight_mask = torch.cat([tmp,idx_mask],dim = -1)
+    # # shift right. [B*K , L]
+    # spotlight_mask1 = spotlight_mask[:,:-1]
+    # spotlight_mask2 = (focus_mask == 1).long()
+    # spotlight_mask = spotlight_mask1 * spotlight_mask2 * lamda + 1.0000
+
+    return spotlight_mask
+
+
+def get_copy_attention(attention,focus_mask):
+    '''
+    Args:
+        attention: B x source_len
+        focus_mask: B x source_len
+    return:
+        copy_attention: B x source_len
+    '''
+    focus_mask = focus_mask == 1
+    copy_attention = attention.masked_fill(focus_mask,0)
+    return copy_attention
+
+def get_dec_focus_mask(source_WORD_encoding,dec_input_word):
+    '''
+    Args:
+        source_WORD_encoding: B x source_len
+        dec_input_word: B x 1
+    return:
+        dec_focus_mask: B x 1
+    '''
+
+    dec_focus_mask = (source_WORD_encoding==dec_input_word.unsqueeze(1))
+    dec_focus_mask = torch.sum(dec_focus_mask,1).long()
+    dec_focus_mask[dec_focus_mask!=0] = 1
+    return dec_focus_mask

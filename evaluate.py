@@ -95,7 +95,7 @@ def evaluate(loader, model, epoch, config, test=False):
                     
                 else:
                     # [B * n_mixture, L]
-                    focus_p, focus_segment_p = model.selector(
+                    pos_context, focus_p, focus_segment_p = model.selector(
                         source_WORD_encoding,
                         answer_position_BIO_encoding,
                         ner_encoding,
@@ -155,6 +155,7 @@ def evaluate(loader, model, epoch, config, test=False):
                 train=False,
                 decoding_type=config.decoding,
                 beam_k=config.beam_k,
+                pos_context=pos_context,
                 max_dec_len=30 if config.task == 'QG' else 120 if config.task == 'SM' else exit(),
                 temperature=config.temperature,
                 diversity_lambda=config.diversity_lambda)
